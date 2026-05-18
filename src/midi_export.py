@@ -31,6 +31,26 @@ GM_DRUM_NOTE = {
 PPQ = 1920
 
 
+def estimate_precise_bpm(beats: np.ndarray) -> tuple[float, float]:
+    """
+    선형 회귀로 BPM 정밀 추정. 모든 비트 시각을 활용해 median 보다 정확.
+
+    fit: t_i = intercept + slope * i  (i = beat index)
+    → IBI = slope, BPM = 60/slope
+
+    반환: (bpm, max_drift_ms)
+        max_drift_ms = 회귀 적합값과 실제 beat 시각의 최대 편차 — 가변 템포 진단용
+    """
+    if len(beats) < 4:
+        return 120.0, 0.0
+    idx = np.arange(len(beats))
+    slope, intercept = np.polyfit(idx, beats, 1)
+    bpm = 60.0 / slope if slope > 0 else 120.0
+    fitted = intercept + slope * idx
+    max_drift_ms = float(np.max(np.abs(beats - fitted))) * 1000
+    return bpm, max_drift_ms
+
+
 def export_midi(
     refined_onsets: Dict[str, List[Dict[str, float]]],
     beats: np.ndarray,
@@ -39,12 +59,10 @@ def export_midi(
     audio_duration_sec: float | None = None,
 ) -> None:
     """원본 타이밍을 그대로 보존한 GM 드럼 MIDI 생성."""
-    # 단일 tempo
-    if len(beats) < 2:
-        bpm = 120.0
-    else:
-        median_ibi = float(np.median(np.diff(beats)))
-        bpm = 60.0 / median_ibi if median_ibi > 0 else 120.0
+    bpm, max_drift_ms = estimate_precise_bpm(beats)
+    print(f"[midi] 정밀 BPM (선형 회귀): {bpm:.4f}  "
+          f"(곡 내 fit 최대 편차 {max_drift_ms:.1f}ms — "
+          f"{'거의 constant tempo' if max_drift_ms < 30 else '가변 템포 가능성, 별도 tempo map 필요'})")
     tempo_us = mido.bpm2tempo(bpm)
 
     # 모든 이벤트 평탄화: (time_sec, type, note, velocity)

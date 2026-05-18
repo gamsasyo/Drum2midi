@@ -128,9 +128,35 @@ def main():
 
     # MIDI (Ableton clip 길이 매칭 위해 원본 오디오 길이까지 패딩)
     import soundfile as sf
+    from src.midi_export import estimate_precise_bpm
     audio_dur = sf.info(str(args.input_wav)).duration
     midi_path = out / "drums.mid"
     export_midi(refined, beats, midi_path, audio_duration_sec=audio_dur)
+
+    # DAW 동기화 가이드
+    precise_bpm, drift_ms = estimate_precise_bpm(beats)
+    guide_path = out / "ableton_sync.txt"
+    guide_path.write_text(
+        f"""DAW 동기화 가이드
+================================================================
+이 곡의 정밀 BPM:  {precise_bpm:.4f}
+첫 비트 시각:       {beats[0]:.4f}s
+fit 최대 편차:      {drift_ms:.1f} ms
+
+★ Ableton 사용시:
+  1. 프로젝트 BPM 을 정확히 {precise_bpm:.4f} 로 설정
+     (Tempo 필드 클릭 → 소수점 4자리까지 입력)
+  2. drums.mid 와 원본 오디오 둘 다 동일 트랙 시작점에 정렬
+  3. MIDI clip 의 "Original BPM" 도 {precise_bpm:.4f} 로 설정
+  4. 오디오는 warp 비활성화 (원본 그대로)
+
+★ 그래도 드리프트 발견시:
+  - 곡 자체가 가변 BPM (fit 최대 편차 {drift_ms:.1f}ms 가 30ms+ 면 의심)
+  - 또는 librosa beat tracker 의 한계 (madmom / Beat-this! 같은 SOTA 필요)
+================================================================
+"""
+    )
+    print(f"[guide] saved: {guide_path}")
 
     # Summary
     summary_path = out / "summary.txt"

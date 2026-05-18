@@ -115,7 +115,10 @@ def detect_phase_shift(
     return 0.0
 
 
-def extract_beat_grid(drums_wav: Path, output_dir: Path, tracker: str = "auto") -> Tuple[np.ndarray, str]:
+def extract_beat_grid(
+    drums_wav: Path, output_dir: Path, tracker: str = "auto",
+    bpm_hint: Optional[float] = None,
+) -> Tuple[np.ndarray, str]:
     """
     비트(quarter-note) 시각 배열 반환. 단위: 초.
     """
@@ -132,7 +135,7 @@ def extract_beat_grid(drums_wav: Path, output_dir: Path, tracker: str = "auto") 
         if m == "madmom":
             beats = _madmom_beats(drums_wav)
         elif m == "librosa":
-            beats = _librosa_beats(drums_wav)
+            beats = _librosa_beats(drums_wav, start_bpm=bpm_hint)
         else:
             raise ValueError(f"Unknown tracker: {m}")
         if beats is not None and len(beats) >= 4:
@@ -162,10 +165,17 @@ def _madmom_beats(drums_wav: Path) -> Optional[np.ndarray]:
         return None
 
 
-def _librosa_beats(drums_wav: Path) -> Optional[np.ndarray]:
+def _librosa_beats(drums_wav: Path, start_bpm: Optional[float] = None) -> Optional[np.ndarray]:
     try:
         y, sr = librosa.load(str(drums_wav), sr=None, mono=True)
-        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, units="frames")
+        kwargs = {"y": y, "sr": sr, "units": "frames"}
+        if start_bpm is not None and start_bpm > 0:
+            # librosa 가 start_bpm 근처에서 검색하도록 강력히 bias.
+            # 기본 120, jungle/dnb 면 170 같이 명시해야 octave error 안 발생.
+            kwargs["start_bpm"] = float(start_bpm)
+            kwargs["tightness"] = 400  # 기본 100 → 더 strict 하게 BPM 유지
+            print(f"[grid/librosa] start_bpm hint = {start_bpm} (tightness 400)")
+        tempo, beat_frames = librosa.beat.beat_track(**kwargs)
         beats = librosa.frames_to_time(beat_frames, sr=sr)
         return np.asarray(beats)
     except Exception as e:

@@ -138,7 +138,15 @@ def main():
     print("\n" + "=" * 64)
     print("Stage 4: BEAT GRID + DEVIATION")
     print("=" * 64)
-    beats, tracker = extract_beat_grid(drums_wav, out, tracker=args.beat_tracker)
+    # bpm-hint 가 있으면 beat tracker 에 start_bpm 으로 전달 (캐시도 무효화)
+    if args.bpm_hint and (out / "beat_grid.json").exists():
+        cached_bpm = float(__import__("json").loads((out / "beat_grid.json").read_text()).get("bpm", 0))
+        if abs(cached_bpm - args.bpm_hint) / max(args.bpm_hint, 1) > 0.05:
+            (out / "beat_grid.json").unlink()
+            print(f"[grid] cached BPM {cached_bpm:.2f} ≠ hint {args.bpm_hint}, 캐시 삭제")
+    beats, tracker = extract_beat_grid(
+        drums_wav, out, tracker=args.beat_tracker, bpm_hint=args.bpm_hint,
+    )
 
     # BPM hint 가 있으면 octave error (2x/0.5x/3x/1/3x) 자동 보정
     if args.bpm_hint is not None:

@@ -1,98 +1,196 @@
-# Drum2midi — Drum Microtiming Analysis
+# Drum2midi
 
-WAV 음원에서 드럼의 인간적 마이크로타이밍(스윙, push/pull)을 분석한다.
-드럼을 그리드에 스냅하지 않고, **각 드럼 히트가 비트 그리드 대비 몇 ms
-밀리거나 당겨졌는지**를 측정한다.
+**Microtiming analysis of drums from polyphonic audio.**
+Measures how each drum hit deviates from the beat grid in milliseconds —
+without quantizing — to expose the human feel (swing, push/pull, ghost
+notes) baked into a recording.
 
-입력: 다른 멜로딕 악기가 섞인 전자음악 (덥/EDM, 보컬 거의 없음 가정).
+Input: a stereo WAV of electronic music (dub, EDM, etc.) with mixed
+melodic instruments and minimal vocals.
 
-## 파이프라인
+Output: a MIDI file that preserves the original absolute timing of every
+drum hit, plus statistics, visualizations, and a CSV with per-hit
+deviation values.
 
-1. **Demucs**로 drums 스템 분리
-2. **드럼 전사** (ADTOF → OaF → librosa 폴백): kick/snare/hihat onset 검출
-3. **정밀 onset 재측정**: 분리된 드럼 스템에서 샘플 단위 정밀도 확보
-4. **비트 그리드 + deviation 계산**: madmom DBNBeatTracker로 그리드 추출,
-   각 onset의 그리드 대비 deviation(ms) 기록 (스냅 없음)
+---
 
-## 설치
+## Why
 
-### 0. 가상환경
+Drum machines and quantized programming snap every hit to a rigid grid.
+Human drummers don't — they push, lag, swing, and accent within a few
+milliseconds of the grid, and that micro-rhythmic vocabulary is the
+difference between a sterile beat and a groove that moves the body.
 
-```bash
-cd /Users/xyl/Documents/GitHub/Drum2midi
-python3.9 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip wheel setuptools
+Most drum-transcription tools quantize their output. This pipeline
+deliberately does not. The goal is to *measure* the deviations precisely
+so that a producer can:
+
+- Quantify the groove DNA of a reference recording.
+- Compare microtiming signatures across different songs, drummers, or
+  genres.
+- Audit programmed drums for whether they sound "too perfect."
+- Build humanization tools that inject learned microtiming back into
+  quantized MIDI.
+
+---
+
+## Example output
+
+A 161.68 BPM rock track, drums separated and analyzed:
+
+```
+class    count    mean dev (ms)    std (ms)   notes
+────────────────────────────────────────────────────────────
+kick       187           −9.33        3.48    consistent push
+snare      145           −0.40       32.25    backbeat, 16th-flexible
+hihat      444          −11.22        3.56    tightest, "groove spine"
+tom         22           −9.64        2.28
+cymbal       4          −16.88        1.84
+────────────────────────────────────────────────────────────
+swing_ratio = 1.000 (straight 8ths)
+ghost notes: hihat 299/444 (67%), snare 24/145 (17%)
 ```
 
-> Python 3.9 권장. 3.11+는 madmom Cython 빌드가 깨질 수 있다.
-> 그래도 코드는 madmom 실패시 librosa 폴백으로 동작한다.
+---
 
-### 1. 코어 + Demucs + madmom
+## Pipeline
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  INPUT: stereo WAV (mixed instruments)                              │
+└─────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │ Stage 1: SOURCE SEPARATION                                   │
+  │   Demucs v4 (htdemucs_ft) extracts the drum stem             │
+  │   → outputs/<song>/drums.wav                                 │
+  └──────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │ Stage 2: DRUM TRANSCRIPTION (5-class)                        │
+  │   ADTOF-pytorch (Frame_RNN) → kick / snare / tom / hihat /   │
+  │                               cymbal onsets                  │
+  │   Fallback chain: ADTOF → OaF → librosa band-onset           │
+  │   → raw_onsets.json                                          │
+  └──────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │ Stage 3: SAMPLE-PRECISION ONSET REFINEMENT                   │
+  │   Stage 2 onsets are frame-quantized (≈10 ms). For each      │
+  │   coarse onset, apply class-specific band filter, then take  │
+  │   the peak of d|x|²/dt within a ±50 ms window for sample-    │
+  │   accurate timing.                                           │
+  │   → refined_onsets.json                                      │
+  └──────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │ Stage 4: BEAT GRID & DEVIATION                               │
+  │   • librosa.beat.beat_track (or madmom) → beat times         │
+  │   • Auto-detect ½-beat phase shift via kick circular mean    │
+  │   • Least-squares fit for precise BPM (vs. naive median)     │
+  │   • Build 8th / 16th subdivision grids                       │
+  │   • For each onset, record (onset_time − nearest_grid) in    │
+  │     ms.  No snapping.                                        │
+  │   • Gap-based swing-ratio detection (wraparound-aware)       │
+  │   • Bimodal-velocity ghost / accent labeling per class       │
+  └──────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │ OUTPUTS (per run, in runs/<timestamp>/)                      │
+  │   drums.mid           original timing preserved (PPQ 1920)   │
+  │   timing_analysis.csv per-hit deviation + ghost label        │
+  │   summary.txt         class stats + swing + ghost analysis   │
+  │   ableton_sync.txt    precise BPM + DAW alignment guide      │
+  │   viz/*.png           5 plots: timeline, histogram, heatmap, │
+  │                       velocity distribution, ghost vs accent │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Installation
+
+Python 3.9 recommended (3.11+ may hit madmom build issues, but the
+pipeline falls back to librosa gracefully).
 
 ```bash
+git clone https://github.com/gamsasyo/Drum2midi.git
+cd Drum2midi
+python3.9 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip wheel "setuptools<81"
 pip install -r requirements.txt
 ```
 
-처음 실행하면 Demucs가 htdemucs_ft 모델 가중치(~300MB)를 자동 다운로드한다.
-
-### 2. (선택) ADTOF — 더 정확한 드럼 클래스 분류
-
-ADTOF는 pip로 안 깔린다. 별도 clone + 설치 필요:
+If madmom fails to build (common on newer Python):
 
 ```bash
-git clone https://github.com/MZehren/ADTOF.git external/ADTOF
-cd external/ADTOF
-pip install -e .
-# 모델 가중치는 ADTOF 레포 README의 다운로드 링크 참고
-cd ../..
+pip install Cython
+pip install --no-build-isolation "madmom>=0.16.1"
 ```
 
-설치 실패해도 파이프라인은 librosa 대역별 폴백으로 계속 동작한다.
-어느 method가 쓰였는지는 콘솔에 명시된다.
+The pipeline runs without madmom — it falls back to librosa beat
+tracking.
 
-### 3. (대안) Magenta OaF Drums
-
-ADTOF가 안 되면 Magenta OaF를 시도해본다:
+### Optional: ADTOF (PyTorch port) for higher-quality 5-class transcription
 
 ```bash
-pip install magenta  # tensorflow 의존성으로 무겁다, 실패 가능
+git clone https://github.com/xavriley/ADTOF-pytorch.git external/ADTOF-pytorch
+pip install -e external/ADTOF-pytorch
 ```
 
-이것도 안 되면 자동으로 librosa 폴백으로 떨어진다.
+On Python 3.9 you may need to add `from __future__ import annotations`
+to ADTOF-pytorch source files (they use PEP 604 union syntax).
 
-## 사용
+Without ADTOF, the pipeline falls back to a 3-class librosa
+band-onset detector (kick / snare / hihat only).
+
+---
+
+## Usage
 
 ```bash
 python analyze.py path/to/track.wav
 ```
 
-옵션:
+### Common flags
 
 ```bash
-python analyze.py track.wav \
-  --output-dir outputs/track \
-  --skip-separation         # 이미 drums.wav 분리됐으면 스킵
-  --skip-transcription      # raw_onsets.json 있으면 스킵
-  --transcription-method auto|adtof|oaf|librosa  # 강제 지정
-  --beat-tracker auto|madmom|librosa
+# Re-run analysis without re-doing the expensive Demucs separation
+python analyze.py track.wav --skip-separation --skip-transcription
+
+# Tune ADTOF per-class thresholds (lower = more sensitive)
+# Order: kick, snare, tom, hihat, cymbal
+python analyze.py track.wav --adtof-thresholds 0.22,0.24,0.32,0.18,0.30
+
+# Label the run for later comparison
+python analyze.py track.wav --run-name phase-fix
 ```
 
-## 산출물 구조
+Full options: `python analyze.py --help`.
+
+---
+
+## Output structure
 
 ```
 outputs/<track>/
-├── drums.wav               ← 캐시: Demucs 분리 드럼 스템
-├── raw_onsets.json         ← 캐시: Stage 2 거친 onset
-├── refined_onsets.json     ← 캐시: Stage 3 정밀 onset
-├── beat_grid.json          ← 캐시: librosa/madmom 비트 시각
-└── runs/                   ★ 매 실행마다 timestamped 서브폴더
-    ├── 2026-05-19_00-15-30/                (시간 자동)
-    └── 2026-05-19_00-25-00_with-ghost/     (--run-name 으로 라벨)
-        ├── drums.mid              원본 절대 타이밍 보존 (PPQ 1920)
-        ├── timing_analysis.csv    onset별 deviation + ghost 라벨
-        ├── summary.txt            클래스별 통계 + swing + ghost 분석
-        ├── ableton_sync.txt       정밀 BPM 과 DAW 동기화 가이드
+├── drums.wav                ← cached: separated drum stem (Stage 1)
+├── raw_onsets.json          ← cached: Stage 2 coarse onsets
+├── refined_onsets.json      ← cached: Stage 3 refined onsets
+├── beat_grid.json           ← cached: beat times
+└── runs/                    ← one folder per run
+    ├── 2026-05-19_00-15-30/                  (auto timestamp)
+    └── 2026-05-19_00-25-00_phase-fix/        (--run-name "phase-fix")
+        ├── drums.mid              GM drums, original timing
+        ├── timing_analysis.csv    one row per onset
+        ├── summary.txt            full stats
+        ├── ableton_sync.txt       precise BPM + alignment guide
         └── viz/
             ├── dev_timeline.png
             ├── dev_histogram.png
@@ -101,22 +199,91 @@ outputs/<track>/
             └── ghost_vs_accent.png
 ```
 
-**왜 이렇게:** Stage 1~4 무거운 캐시는 top-level 에 두고 (재실행시 스킵),
-실행마다 다른 결과물(MIDI/CSV/summary/viz)은 timestamped 폴더에 분리.
-서로 다른 실험(다른 비트 트래커, 다른 threshold 등) 결과 비교가 깔끔.
+Stage 1–4 results are cached at the top level. Each run produces its own
+timestamped folder so experiments are never overwritten.
 
-## 단계별 재실행
+---
 
-각 단계가 산출물을 파일로 저장하기 때문에 `--skip-*` 플래그로 중간부터
-재실행 가능. 예: 비트 트래커만 다시 돌리고 싶으면
+## Notes on accuracy
 
-```bash
-python analyze.py track.wav --skip-separation --skip-transcription
-```
+- **Precise BPM via least-squares fit.** A naive `median(diff(beats))`
+  is biased by IBI jitter; on a 414-beat song this caused a 0.18 BPM
+  error and ~200 ms of drift at the end of the track. Linear regression
+  on all beat times eliminates this — `ableton_sync.txt` reports the
+  fitted BPM to 4 decimal places.
+- **Phase-shift auto-correction.** `librosa.beat.beat_track` sometimes
+  locks onto offbeats rather than downbeats. The kick fractional-position
+  circular mean is used to detect this and shift the grid by IBI/2 when
+  needed.
+- **Wrap-around-aware swing detection.** Onset frac is on a circle (0=1),
+  so a straight 8th-note pattern with a small push appears as modes at
+  0.46 / 0.96 — not 0.0 / 0.5. The gap-based swing calculation handles
+  this correctly.
+- **Ghost / accent separation.** Each class's velocity histogram is
+  examined for bimodality; if two peaks are well-separated, the valley
+  between them is used as a threshold. Ghost notes inherit the same
+  microtiming pipeline so their push/pull can be compared against
+  accents.
 
-## 출력 해석
+---
 
-- `deviation_8th_ms` 양수 = 그리드보다 **늦게** (laid-back, behind the beat)
-- 음수 = 그리드보다 **일찍** (rushed, on top / pushing)
-- `swing_ratio` = 8분음표 쌍의 long/short 길이 비. 1.0=균등, 1.5=트리플렛 스윙,
-  2.0=완전 셔플
+## Models & libraries
+
+This project stands on the shoulders of several well-cited works.
+
+### Source separation
+
+**Demucs** — Hybrid Transformer Demucs (`htdemucs_ft`)
+Défossez, A. *Hybrid Spectrogram and Waveform Source Separation.* ISMIR
+2021 / ISMIR Workshop on Music Source Separation, 2022.
+GitHub: <https://github.com/facebookresearch/demucs> · License: MIT
+
+### Drum transcription
+
+**ADTOF / ADTOF-pytorch** — Frame_RNN drum transcription model
+Zehren, M.; Alunno, M.; Bientinesi, P. *High-Quality and Reproducible
+Automatic Drum Transcription from Crowdsourced Data.* Signals 4 (2023):
+768–787. <https://doi.org/10.3390/signals4040042>
+Zehren, M.; Alunno, M.; Bientinesi, P. *ADTOF: A Large Dataset of
+Non-Synthetic Music for Automatic Drum Transcription.* ISMIR 2021.
+PyTorch port: <https://github.com/xavriley/ADTOF-pytorch>
+Original: <https://github.com/MZehren/ADTOF>
+License: CC BY-NC-SA 4.0 — **non-commercial use only**
+
+### Beat tracking & audio analysis
+
+**librosa** — McFee, B. et al. *librosa: Audio and Music Signal Analysis
+in Python.* SciPy 2015. License: ISC.
+
+**madmom** — Böck, S.; Korzeniowski, F.; Schlüter, J.; Krebs, F.;
+Widmer, G. *madmom: A New Python Audio and Music Signal Processing
+Library.* ACM Multimedia 2016. License: BSD 3-Clause.
+
+Other dependencies (`numpy`, `scipy`, `torch`, `torchaudio`, `mido`,
+`pretty_midi`, `pandas`, `matplotlib`) are all permissively licensed
+(MIT / BSD).
+
+---
+
+## License
+
+The pipeline code in this repository (`analyze.py`, `src/*.py`) is
+released under the MIT license — see [LICENSE](LICENSE).
+
+However, the **ADTOF** model and weights this pipeline depends on are
+released under **CC BY-NC-SA 4.0** by their authors, which restricts
+commercial use. If you build commercial work on top of this pipeline,
+you must either remove the ADTOF dependency or obtain a commercial
+licence from the ADTOF authors. Everything else (Demucs, librosa,
+madmom, etc.) is permissively licensed.
+
+This project is intended as a research / educational tool for music
+producers and is not a commercial product.
+
+---
+
+## Citations
+
+If you use this pipeline in academic work, please cite the underlying
+models — Demucs, ADTOF, librosa, madmom — rather than this repository.
+The interesting work is theirs; this is integration glue.

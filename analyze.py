@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from src.separation import separate_drums
@@ -49,6 +50,8 @@ def main():
                    help="Stage 4 비트 트래커 강제")
     p.add_argument("--demucs-model", default="htdemucs_ft",
                    help="Demucs 모델 (기본: htdemucs_ft)")
+    p.add_argument("--run-name", default=None,
+                   help="이번 실행 결과 폴더 이름 suffix (기본: 타임스탬프만)")
     args = p.parse_args()
 
     if not args.input_wav.exists():
@@ -57,7 +60,13 @@ def main():
 
     out = args.output_dir or (Path("outputs") / args.input_wav.stem)
     out.mkdir(parents=True, exist_ok=True)
-    viz_dir = out / "viz"
+
+    # 이번 실행 결과를 담을 timestamped 서브폴더
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_name = f"{ts}_{args.run_name}" if args.run_name else ts
+    run_dir = out / "runs" / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    viz_dir = run_dir / "viz"
 
     # ──────────── Stage 1 ────────────
     print("\n" + "=" * 64)
@@ -119,7 +128,7 @@ def main():
     print("=" * 64)
 
     # CSV
-    csv_path = out / "timing_analysis.csv"
+    csv_path = run_dir / "timing_analysis.csv"
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         w.writeheader()
@@ -130,12 +139,12 @@ def main():
     import soundfile as sf
     from src.midi_export import estimate_precise_bpm
     audio_dur = sf.info(str(args.input_wav)).duration
-    midi_path = out / "drums.mid"
+    midi_path = run_dir / "drums.mid"
     export_midi(refined, beats, midi_path, audio_duration_sec=audio_dur)
 
     # DAW 동기화 가이드
     precise_bpm, drift_ms = estimate_precise_bpm(beats)
-    guide_path = out / "ableton_sync.txt"
+    guide_path = run_dir / "ableton_sync.txt"
     guide_path.write_text(
         f"""DAW 동기화 가이드
 ================================================================
@@ -159,14 +168,15 @@ fit 최대 편차:      {drift_ms:.1f} ms
     print(f"[guide] saved: {guide_path}")
 
     # Summary
-    summary_path = out / "summary.txt"
+    summary_path = run_dir / "summary.txt"
     summarize(rows, summary_path)
 
     # Viz
     render_all(rows, viz_dir)
 
     print("\n" + "=" * 64)
-    print(f"DONE. 출력 폴더: {out}")
+    print(f"DONE. 이번 실행 결과: {run_dir}")
+    print(f"     캐시 (재실행시 재사용): {out}")
     print(f"  transcription method: {method}")
     print(f"  beat tracker:         {tracker}")
     print("=" * 64)

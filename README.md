@@ -78,20 +78,32 @@ python analyze.py track.wav \
   --beat-tracker auto|madmom|librosa
 ```
 
-## 산출물 (outputs/<track>/ 안)
+## 산출물 구조
 
-| 파일 | 설명 |
-|---|---|
-| `drums.wav` | Demucs로 분리된 드럼 스템 |
-| `raw_onsets.json` | Stage 2의 거친 onset (~10ms 양자화) |
-| `refined_onsets.json` | Stage 3의 정밀 onset (샘플 단위) |
-| `beat_grid.json` | madmom/librosa로 추출한 비트 시각 |
-| `drums.mid` | 원본 절대 타이밍 보존 MIDI (스냅 없음, PPQ=1920) |
-| `timing_analysis.csv` | onset별 deviation 데이터 |
-| `summary.txt` | 클래스별 평균/표준편차/스윙비율 |
-| `viz/dev_timeline.png` | 시간축 deviation 그래프 |
-| `viz/dev_histogram.png` | 클래스별 deviation 히스토그램 |
-| `viz/beat_position_heatmap.png` | 비트 위치별 deviation 히트맵 |
+```
+outputs/<track>/
+├── drums.wav               ← 캐시: Demucs 분리 드럼 스템
+├── raw_onsets.json         ← 캐시: Stage 2 거친 onset
+├── refined_onsets.json     ← 캐시: Stage 3 정밀 onset
+├── beat_grid.json          ← 캐시: librosa/madmom 비트 시각
+└── runs/                   ★ 매 실행마다 timestamped 서브폴더
+    ├── 2026-05-19_00-15-30/                (시간 자동)
+    └── 2026-05-19_00-25-00_with-ghost/     (--run-name 으로 라벨)
+        ├── drums.mid              원본 절대 타이밍 보존 (PPQ 1920)
+        ├── timing_analysis.csv    onset별 deviation + ghost 라벨
+        ├── summary.txt            클래스별 통계 + swing + ghost 분석
+        ├── ableton_sync.txt       정밀 BPM 과 DAW 동기화 가이드
+        └── viz/
+            ├── dev_timeline.png
+            ├── dev_histogram.png
+            ├── beat_position_heatmap.png
+            ├── velocity_distribution.png
+            └── ghost_vs_accent.png
+```
+
+**왜 이렇게:** Stage 1~4 무거운 캐시는 top-level 에 두고 (재실행시 스킵),
+실행마다 다른 결과물(MIDI/CSV/summary/viz)은 timestamped 폴더에 분리.
+서로 다른 실험(다른 비트 트래커, 다른 threshold 등) 결과 비교가 깔끔.
 
 ## 단계별 재실행
 

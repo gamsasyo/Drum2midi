@@ -19,7 +19,8 @@ from src.separation import separate_drums
 from src.transcription import transcribe_drums, DRUM_CLASSES
 from src.refinement import refine_onsets
 from src.ghost import annotate_ghosts
-from src.grid import extract_beat_grid, compute_deviations, detect_phase_shift
+from src.grid import (extract_beat_grid, compute_deviations,
+                       detect_phase_shift, correct_bpm_octave)
 from src.midi_export import export_midi
 from src.stats import summarize
 from src.viz import render_all
@@ -52,6 +53,10 @@ def main():
     p.add_argument("--beat-tracker", default="auto",
                    choices=["auto", "madmom", "librosa"],
                    help="Stage 4 비트 트래커 강제")
+    p.add_argument("--bpm-hint", type=float, default=None,
+                   help="진짜 BPM 힌트 (예: 88). librosa 가 octave error "
+                        "(2x / 0.5x / 3x / 1/3x) 일 때 자동 보정. "
+                        "Shazam 등에서 BPM 확인 후 사용 권장.")
     p.add_argument("--demucs-model", default="htdemucs_ft",
                    help="Demucs 모델 (기본: htdemucs_ft)")
     p.add_argument("--run-name", default=None,
@@ -134,6 +139,10 @@ def main():
     print("Stage 4: BEAT GRID + DEVIATION")
     print("=" * 64)
     beats, tracker = extract_beat_grid(drums_wav, out, tracker=args.beat_tracker)
+
+    # BPM hint 가 있으면 octave error (2x/0.5x/3x/1/3x) 자동 보정
+    if args.bpm_hint is not None:
+        beats = correct_bpm_octave(beats, args.bpm_hint)
 
     # Phase shift 자동 보정: librosa-beats 가 ½ IBI 어긋난 자리에 잡힌 경우 당김
     shift = detect_phase_shift(beats, raw_onsets)

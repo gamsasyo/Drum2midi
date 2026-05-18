@@ -16,6 +16,59 @@ import librosa
 import numpy as np
 
 
+def correct_bpm_octave(beats: np.ndarray, bpm_hint: float, tol: float = 0.05) -> np.ndarray:
+    """
+    검출된 BPM 이 bpm_hint 의 2배/0.5배 (또는 3배/1/3배) 인 경우 자동 보정.
+
+    librosa beat_track 은 laid-back / half-time / double-time 곡에서
+    octave error 가 자주 발생한다. 진짜 BPM 한 번이라도 알면 보정 가능.
+
+    예: hint=88, detected=178 → ratio=2.02 → 매 2번째 beat 만 사용
+        hint=88, detected=44  → ratio=0.50 → beat 사이에 보간
+
+    tol: 비율이 정수배(2,3,1/2,1/3)에서 ±5% 이내면 보정 트리거.
+    """
+    if len(beats) < 4:
+        return beats
+    median_ibi = float(np.median(np.diff(beats)))
+    detected_bpm = 60.0 / median_ibi if median_ibi > 0 else 0
+    if detected_bpm <= 0:
+        return beats
+
+    ratio = detected_bpm / bpm_hint
+    # 가까운 정수배 찾기 (2, 3, 1/2, 1/3)
+    candidates = [(2.0, "halve"), (3.0, "third"),
+                  (0.5, "double"), (1.0 / 3.0, "triple")]
+    for r, action in candidates:
+        if abs(ratio - r) / r < tol:
+            print(f"[grid] BPM hint 보정: detected={detected_bpm:.2f}, "
+                  f"hint={bpm_hint:.2f}, ratio={ratio:.3f} → {action}")
+            if action == "halve":
+                return beats[::2]   # 매 2번째 beat
+            elif action == "third":
+                return beats[::3]
+            elif action == "double":
+                # beat 사이에 중점 삽입
+                new_beats = []
+                for i in range(len(beats) - 1):
+                    new_beats.append(beats[i])
+                    new_beats.append((beats[i] + beats[i + 1]) / 2)
+                new_beats.append(beats[-1])
+                return np.asarray(new_beats)
+            elif action == "triple":
+                new_beats = []
+                for i in range(len(beats) - 1):
+                    new_beats.append(beats[i])
+                    step = (beats[i + 1] - beats[i]) / 3
+                    new_beats.append(beats[i] + step)
+                    new_beats.append(beats[i] + 2 * step)
+                new_beats.append(beats[-1])
+                return np.asarray(new_beats)
+    print(f"[grid] BPM hint 보정 안 함: detected={detected_bpm:.2f} 이 "
+          f"hint={bpm_hint} 의 정수배가 아님 (ratio={ratio:.3f})")
+    return beats
+
+
 def detect_phase_shift(
     beats: np.ndarray, raw_onsets: Dict[str, List[float]]
 ) -> float:

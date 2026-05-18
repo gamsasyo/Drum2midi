@@ -9,6 +9,14 @@ pandas>=1.5
 tqdm>=4.65
 sounddevice>=0.5     # for align_viewer.py audio playback
 
+# Stage 4: Beat-this! (Foscarin·Schlüter·Widmer ISMIR 2024) — SOTA 비트 트래커
+# librosa.beat 보다 정확, octave error 거의 없음, 가변 BPM 자동 추적.
+# Python 3.9 사용시 PEP 604 union syntax 패치 필요 (README 참고).
+beat-this>=1.1
+einops
+soxr
+rotary-embedding-torch
+
 # Stage 1: Demucs 드럼 분리 (필수 수준, 무겁지만 설치 안정적)
 # CPU/MPS만 써도 동작. M1/M2 Mac이면 MPS 가속.
 demucs>=4.0

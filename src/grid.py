@@ -128,11 +128,13 @@ def extract_beat_grid(
         print(f"[grid] cached beat_grid.json 사용 (tracker={data.get('tracker')})")
         return np.array(data["beats"]), data.get("tracker", "unknown")
 
-    methods = ["madmom", "librosa"] if tracker == "auto" else [tracker]
+    methods = ["beat_this", "madmom", "librosa"] if tracker == "auto" else [tracker]
     beats = None
     used = None
     for m in methods:
-        if m == "madmom":
+        if m == "beat_this":
+            beats = _beat_this_beats(drums_wav)
+        elif m == "madmom":
             beats = _madmom_beats(drums_wav)
         elif m == "librosa":
             beats = _librosa_beats(drums_wav, start_bpm=bpm_hint)
@@ -152,6 +154,80 @@ def extract_beat_grid(
 
     cache.write_text(json.dumps({"tracker": used, "beats": beats.tolist(), "bpm": bpm}, indent=2))
     return beats, used
+
+
+def _beat_this_beats(drums_wav: Path) -> Optional[np.ndarray]:
+    """
+    Beat This! (Foscarin·Schlüter·Widmer, ISMIR 2024) — SOTA 비트 트래커.
+    Transformer 기반, 가변 BPM 자동 추적, octave error 거의 없음.
+
+    주의: Beat-this! 는 confidence 기반이라 atmospheric intro / 드럼 sparse
+    구간에서 비트를 안 잡음. 후처리로 큰 gap 을 median IBI 간격으로 보간해
+    contiguous 그리드 만든다.
+    """
+    try:
+        import importlib.util
+        if importlib.util.find_spec("beat_this") is None:
+            return None
+        from beat_this.inference import File2Beats
+        # final0 = 논문 default checkpoint, dbn=False (post-processing 없이도 충분 정확)
+        f2b = File2Beats(checkpoint_path="final0", device="cpu", dbn=False)
+        beats, _downbeats = f2b(str(drums_wav))
+        beats = np.asarray(beats)
+        if len(beats) < 4:
+            return beats
+
+        median_ibi = float(np.median(np.diff(beats)))
+
+        # ★ Dense-cull: 0.5× median IBI 보다 가까운 인접 비트 제거 (false dense)
+        keep = [beats[0]]
+        n_culled = 0
+        for i in range(1, len(beats)):
+            if beats[i] - keep[-1] >= 0.5 * median_ibi:
+                keep.append(beats[i])
+            else:
+                n_culled += 1
+        beats = np.asarray(keep)
+        if n_culled > 0:
+            print(f"[grid/beat_this] culled {n_culled} too-dense beats "
+                  f"(< 0.5× median IBI {median_ibi*1000:.0f}ms)")
+
+        # median 재계산 (cull 후)
+        median_ibi = float(np.median(np.diff(beats)))
+        filled = [beats[0]]
+        n_filled = 0
+        for i in range(1, len(beats)):
+            gap = beats[i] - filled[-1]
+            if gap > 1.5 * median_ibi:
+                # 보간: 사이에 몇 개 넣을지 (round to nearest int)
+                n_insert = int(round(gap / median_ibi)) - 1
+                if n_insert > 0:
+                    step = gap / (n_insert + 1)
+                    for k in range(1, n_insert + 1):
+                        filled.append(filled[-1] + step)
+                    n_filled += n_insert
+            filled.append(beats[i])
+
+        # ★ Backward extrapolate to t=0 (intro 같이 시작 부분 비트 없는 경우)
+        result = np.asarray(filled)
+        front = []
+        t = result[0] - median_ibi
+        n_front = 0
+        while t > 0:
+            front.insert(0, t)
+            t -= median_ibi
+            n_front += 1
+        if front:
+            result = np.concatenate([np.asarray(front), result])
+
+        if n_filled > 0 or n_front > 0:
+            print(f"[grid/beat_this] gap-filled: +{n_filled} interior + "
+                  f"{n_front} front, median IBI {median_ibi*1000:.1f}ms "
+                  f"({60/median_ibi:.2f} BPM)")
+        return result
+    except Exception as e:
+        print(f"[grid/beat_this] failed: {e}")
+        return None
 
 
 def _madmom_beats(drums_wav: Path) -> Optional[np.ndarray]:

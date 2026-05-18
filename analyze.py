@@ -51,8 +51,8 @@ def main():
                         "comma-separated 5개: kick,snare,tom,hihat,cymbal. "
                         "기본 [0.22,0.24,0.32,0.22,0.30]. 예: 0.15,0.18,0.25,0.15,0.22")
     p.add_argument("--beat-tracker", default="auto",
-                   choices=["auto", "madmom", "librosa"],
-                   help="Stage 4 비트 트래커 강제")
+                   choices=["auto", "beat_this", "madmom", "librosa"],
+                   help="Stage 4 비트 트래커. auto = beat_this → madmom → librosa")
     p.add_argument("--bpm-hint", type=float, default=None,
                    help="진짜 BPM 힌트 (예: 88). librosa 가 octave error "
                         "(2x / 0.5x / 3x / 1/3x) 일 때 자동 보정. "

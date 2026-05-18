@@ -7,6 +7,7 @@ mido>=1.3
 matplotlib>=3.6
 pandas>=1.5
 tqdm>=4.65
+sounddevice>=0.5     # for align_viewer.py audio playback
 
 # Stage 1: Demucs 드럼 분리 (필수 수준, 무겁지만 설치 안정적)
 # CPU/MPS만 써도 동작. M1/M2 Mac이면 MPS 가속.

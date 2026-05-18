@@ -131,14 +131,23 @@ right panel shows distribution overlap.
                                 ▼
   ┌──────────────────────────────────────────────────────────────┐
   │ Stage 4: BEAT GRID & DEVIATION                               │
-  │   • librosa.beat.beat_track (or madmom) → beat times         │
+  │   • Beat-this! (ISMIR 2024) → SOTA beat tracking.            │
+  │     Fallback chain: beat_this → madmom → librosa             │
+  │   • Auto BPM detection with no octave errors                 │
+  │   • Post-process: dense-cull + gap-fill + backward           │
+  │     extrapolation for contiguous grid                        │
   │   • Auto-detect ½-beat phase shift via kick circular mean    │
+  │     (legacy librosa fallback only)                           │
   │   • Least-squares fit for precise BPM (vs. naive median)     │
   │   • Build 8th / 16th subdivision grids                       │
   │   • For each onset, record (onset_time − nearest_grid) in    │
   │     ms.  No snapping.                                        │
   │   • Gap-based swing-ratio detection (wraparound-aware)       │
   │   • Bimodal-velocity ghost / accent labeling per class       │
+  │   • Two MIDI outputs:                                        │
+  │       drums.mid           single-tempo (constant BPM songs)  │
+  │       drums_tempo_map.mid multi-tempo (variable BPM songs,   │
+  │                            for Reaper/Logic)                 │
   └──────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
@@ -176,10 +185,10 @@ pip install Cython
 pip install --no-build-isolation "madmom>=0.16.1"
 ```
 
-The pipeline runs without madmom — it falls back to librosa beat
-tracking.
+The pipeline runs without madmom — Beat-this! (SOTA) is the primary
+beat tracker; madmom and librosa are fallbacks.
 
-### Optional: ADTOF (PyTorch port) for higher-quality 5-class transcription
+### ADTOF (PyTorch port) for 5-class drum transcription
 
 ```bash
 git clone https://github.com/xavriley/ADTOF-pytorch.git external/ADTOF-pytorch
@@ -187,10 +196,32 @@ pip install -e external/ADTOF-pytorch
 ```
 
 On Python 3.9 you may need to add `from __future__ import annotations`
-to ADTOF-pytorch source files (they use PEP 604 union syntax).
+to ADTOF-pytorch source files (they use PEP 604 union syntax). The
+helper at the end of this README documents the fix.
 
 Without ADTOF, the pipeline falls back to a 3-class librosa
 band-onset detector (kick / snare / hihat only).
+
+### Beat-this! — SOTA beat tracker (already in requirements.txt)
+
+Installed automatically via `pip install -r requirements.txt`. On
+Python 3.9, source files need the same PEP 604 annotation patch as
+ADTOF-pytorch:
+
+```bash
+cd .venv/lib/python3.9/site-packages/beat_this && \
+find . -name "*.py" | while read f; do
+  if ! head -1 "$f" | grep -q "from __future__ import annotations"; then
+    if grep -q " | None" "$f" 2>/dev/null; then
+      printf 'from __future__ import annotations\n%s' "$(cat $f)" > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
+  fi
+done
+```
+
+Without Beat-this!, the pipeline falls back to madmom or librosa.
+Beat-this! removes the need for `--bpm-hint` on most tracks — it
+detects the true BPM directly without octave errors.
 
 ---
 
@@ -210,11 +241,33 @@ python analyze.py track.wav --skip-separation --skip-transcription
 # Order: kick, snare, tom, hihat, cymbal
 python analyze.py track.wav --adtof-thresholds 0.22,0.24,0.32,0.18,0.30
 
+# (Legacy) BPM hint if Beat-this! falls back to librosa and gets the
+# tempo wrong. With Beat-this! installed, this is rarely needed.
+python analyze.py track.wav --bpm-hint 88
+
+# Force a specific beat tracker
+python analyze.py track.wav --beat-tracker beat_this   # default fallback chain
+python analyze.py track.wav --beat-tracker librosa     # for testing
+
 # Label the run for later comparison
 python analyze.py track.wav --run-name phase-fix
 ```
 
 Full options: `python analyze.py --help`.
+
+### Verifying alignment — `align_viewer.py`
+
+After analysis, open an interactive viewer that overlays MIDI notes on
+the mel-spectrogram of the audio so you can verify alignment visually
+and aurally:
+
+```bash
+python align_viewer.py outputs/<track>/runs/<timestamp> --click
+```
+
+`--click` mixes a short click sound at each MIDI note time into
+playback so you hear the alignment as well as see it. Controls:
+`space` play/pause, `click` seek, `home` rewind, `esc` stop.
 
 ---
 

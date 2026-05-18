@@ -83,12 +83,58 @@ def summarize(rows: List[Dict], output_txt: Path) -> Dict:
                 lines.append(f"    → 킥과 {h-k:+.2f} ms 차이. 하이햇이 메인 그리드보다 따로 노는 경향.")
 
     lines.append("")
+
+    # Ghost vs Accent 분리 분석
+    if "is_ghost" in df.columns:
+        ghost_lines = _summarize_ghosts(df)
+        if ghost_lines:
+            lines.extend(ghost_lines)
+            lines.append("")
+
     lines.append("=" * 64)
 
     out = "\n".join(lines) + "\n"
     output_txt.write_text(out)
     print(out)
     return summary
+
+
+def _summarize_ghosts(df: pd.DataFrame) -> list:
+    """Ghost / Accent 분리 통계. 데이터 없으면 빈 리스트."""
+    if "is_ghost" not in df.columns:
+        return []
+    df = df.copy()
+    df["is_ghost"] = pd.to_numeric(df["is_ghost"], errors="coerce").fillna(0).astype(int)
+    total_ghosts = int(df["is_ghost"].sum())
+    if total_ghosts == 0:
+        return ["[Ghost note 분석]",
+                "  검출된 ghost note 없음 (velocity 분포 단봉이거나 봉우리 분리 부족)"]
+
+    lines = ["[Ghost note 분석 — accent vs ghost 비교]"]
+    lines.append(f"{'class':<8}{'role':<8}{'count':>7}{'mean_dev':>11}{'std_dev':>10}{'mean_vel':>10}")
+    lines.append(f"{'':8}{'':8}{'':>7}{'(16th ms)':>11}{'(ms)':>10}")
+    for cls in sorted(df.drum_class.unique()):
+        for role, mask in [("accent", df["is_ghost"] == 0), ("ghost", df["is_ghost"] == 1)]:
+            sub = df[(df.drum_class == cls) & mask]
+            if sub.empty:
+                continue
+            lines.append(f"{cls:<8}{role:<8}{len(sub):>7}"
+                         f"{sub.deviation_16th_ms.mean():>+11.2f}"
+                         f"{sub.deviation_16th_ms.std():>10.2f}"
+                         f"{sub.velocity.mean():>10.1f}")
+
+    # snare 클래스에 ghost 가 의미있을 때 push/pull 차이 코멘트
+    snare_acc = df[(df.drum_class == "snare") & (df.is_ghost == 0)]
+    snare_gh  = df[(df.drum_class == "snare") & (df.is_ghost == 1)]
+    if len(snare_acc) >= 4 and len(snare_gh) >= 4:
+        diff = float(snare_gh.deviation_16th_ms.mean() - snare_acc.deviation_16th_ms.mean())
+        lines.append("")
+        if abs(diff) > 4:
+            tag = "더 늦게 (laid-back)" if diff > 0 else "더 일찍 (pushing)"
+            lines.append(f"  ★ Snare ghost 는 accent 보다 평균 {diff:+.2f}ms — {tag}")
+        else:
+            lines.append(f"  Snare ghost/accent microtiming 거의 동일 ({diff:+.2f}ms 차이)")
+    return lines
 
 
 def compute_swing_ratio(df: pd.DataFrame) -> tuple[float | None, str]:

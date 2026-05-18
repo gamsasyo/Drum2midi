@@ -231,6 +231,7 @@ def compute_deviations(
                 "deviation_16th_ms":      round(d16 * 1000, 3),
                 "beat_position":          round(beat_position, 4) if not np.isnan(beat_position) else "",
                 "velocity":               int(ev.get("velocity", 64)),
+                "is_ghost":               int(bool(ev.get("is_ghost", False))),
             })
 
     rows.sort(key=lambda r: r["onset_time_sec"])

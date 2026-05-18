@@ -17,6 +17,7 @@ from pathlib import Path
 from src.separation import separate_drums
 from src.transcription import transcribe_drums, DRUM_CLASSES
 from src.refinement import refine_onsets
+from src.ghost import annotate_ghosts
 from src.grid import extract_beat_grid, compute_deviations, detect_phase_shift
 from src.midi_export import export_midi
 from src.stats import summarize
@@ -27,7 +28,7 @@ CSV_COLUMNS = [
     "onset_time_sec", "drum_class",
     "nearest_grid_8th_sec", "deviation_8th_ms",
     "nearest_grid_16th_sec", "deviation_16th_ms",
-    "beat_position", "velocity",
+    "beat_position", "velocity", "is_ghost",
 ]
 
 
@@ -85,6 +86,17 @@ def main():
     print("Stage 3: REFINEMENT (sample-precision onsets)")
     print("=" * 64)
     refined = refine_onsets(drums_wav, raw_onsets, out)
+
+    # Ghost note 라벨링 (velocity 분포 bimodal 검출)
+    print("\n[ghost] velocity 분포 기반 ghost/accent 분리")
+    ghost_diag = annotate_ghosts(refined)
+    for cls, d in ghost_diag.items():
+        if d["threshold"] is not None:
+            print(f"  {cls:8s} threshold={d['threshold']:3d}  "
+                  f"accent={d['n_accent']:4d}  ghost={d['n_ghost']:4d}  "
+                  f"({d['msg']})")
+        else:
+            print(f"  {cls:8s} ghost 검출 안 됨 ({d['msg']})")
 
     # ──────────── Stage 4 ────────────
     print("\n" + "=" * 64)

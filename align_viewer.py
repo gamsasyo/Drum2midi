@@ -30,7 +30,12 @@ import librosa
 import librosa.display
 import matplotlib
 
-matplotlib.use("TkAgg")
+# macOS 에선 native MacOSX backend, 그 외 시스템은 TkAgg 폴백
+import platform
+if platform.system() == "Darwin":
+    matplotlib.use("MacOSX")
+else:
+    matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import numpy as np
@@ -125,17 +130,29 @@ def main():
     args = p.parse_args()
 
     audio_path, midi_path = resolve_inputs(args.audio, args.midi, args.tempo_map)
-    print(f"audio: {audio_path}")
-    print(f"midi:  {midi_path}")
+    print(f"audio: {audio_path}", flush=True)
+    print(f"midi:  {midi_path}", flush=True)
 
+    print("[1/4] loading audio…", flush=True)
     y, sr = librosa.load(str(audio_path), sr=args.sr, mono=True)
     audio_dur = len(y) / sr
+    print(f"[2/4] computing mel-spectrogram ({audio_dur:.1f}s @ {sr}Hz)…", flush=True)
     mel = librosa.feature.melspectrogram(
         y=y, sr=sr, n_mels=args.n_mels, hop_length=512
     )
     mel_db = librosa.power_to_db(mel, ref=np.max)
+
+    # 매트릭스가 너무 크면 매우 느림 (190s = 8000+ time bin × 96 mel = 768K cells).
+    # 시간축으로 max-pooling 하여 2000 time bin 으로 축소. 렌더 30s → 1s.
+    MAX_TIME_BINS = 2000
+    if mel_db.shape[1] > MAX_TIME_BINS:
+        pool = mel_db.shape[1] // MAX_TIME_BINS
+        n = (mel_db.shape[1] // pool) * pool
+        mel_db = mel_db[:, :n].reshape(mel_db.shape[0], n // pool, pool).max(axis=2)
+        print(f"      downsampled mel-spec time-axis ÷{pool} → shape {mel_db.shape}", flush=True)
+    print(f"[3/4] loading MIDI…", flush=True)
     notes = load_midi_notes(midi_path)
-    print(f"loaded: {audio_dur:.1f}s audio, {len(notes)} MIDI notes")
+    print(f"      → {audio_dur:.1f}s audio, {len(notes)} MIDI notes", flush=True)
 
     # 재생용 mix
     if args.click:
@@ -148,8 +165,9 @@ def main():
         play_audio = y.astype(np.float32)
 
     # ── 플롯 ──
+    print("[4a] creating figure…", flush=True)
     fig, (ax_mel, ax_pr) = plt.subplots(
-        2, 1, figsize=(16, 7), sharex=True,
+        2, 1, figsize=(14, 6), sharex=True,
         gridspec_kw={"height_ratios": [3, 1]},
     )
     fig.suptitle(
@@ -158,24 +176,40 @@ def main():
         fontsize=11,
     )
 
-    librosa.display.specshow(
-        mel_db, sr=sr, hop_length=512, x_axis="time", y_axis="mel",
-        ax=ax_mel, cmap="magma",
+    # specshow 가 pcolormesh 라 큰 매트릭스에 매우 느림 (190s 곡 = 8000+ time bin).
+    # imshow 로 직접 그리는 게 10~50x 빠름.
+    print(f"[4b] imshow mel-spec shape {mel_db.shape}…", flush=True)
+    ax_mel.imshow(
+        mel_db,
+        origin="lower", aspect="auto",
+        extent=(0, audio_dur, 0, args.n_mels),
+        cmap="magma", interpolation="nearest",
     )
-    ax_mel.set_ylabel("freq (mel)")
+    ax_mel.set_ylabel("mel bin")
+    ax_mel.set_yticks([])  # mel 축 라벨 단순화
 
-    # MIDI 컬러 vertical line on mel
+    print(f"[4c] overlaying {len(notes)} MIDI notes (vectorized)…", flush=True)
+    # MIDI vertical line — 클래스별로 묶어서 vectorized 한 번에 그림 (훨씬 빠름)
+    by_class: dict[str, list[float]] = {c: [] for c in CLASS_Y}
+    by_class_vels: dict[str, list[int]] = {c: [] for c in CLASS_Y}
     for t, pitch, vel in notes:
-        _, color = PITCH_TO_CLASS.get(pitch, ("?", "white"))
-        ax_mel.axvline(t, color=color,
-                        alpha=0.3 + 0.5 * (vel / 127), linewidth=0.7)
+        cls, _ = PITCH_TO_CLASS.get(pitch, ("?", "gray"))
+        if cls in by_class:
+            by_class[cls].append(t)
+            by_class_vels[cls].append(vel)
 
-    # 아래 패널 — piano roll
-    for t, pitch, vel in notes:
-        cls, color = PITCH_TO_CLASS.get(pitch, ("?", "gray"))
-        if cls in CLASS_Y:
-            ax_pr.plot(t, CLASS_Y[cls], "o", color=color,
-                        alpha=0.4 + 0.5 * (vel / 127), markersize=5)
+    # imshow 후 ylim 이 (0, n_mels) 로 설정됨
+    y_lo, y_hi = 0, args.n_mels
+    for cls, times in by_class.items():
+        if not times:
+            continue
+        color = {"kick": "#d62728", "snare": "#1f77b4", "hihat": "#2ca02c",
+                 "tom": "#ff7f0e", "cymbal": "#9467bd"}[cls]
+        ax_mel.vlines(times, y_lo, y_hi, colors=color, alpha=0.4, linewidth=0.7)
+        # piano roll: scatter 가 점 1071개 마다 path 그려서 느림.
+        # vlines 로 각 클래스 행에 짧은 stripe 만 표시 — 훨씬 빠름.
+        cy = CLASS_Y[cls]
+        ax_pr.vlines(times, cy - 0.3, cy + 0.3, colors=color, alpha=0.8, linewidth=1.2)
     ax_pr.set_yticks(list(CLASS_Y.values()))
     ax_pr.set_yticklabels(list(CLASS_Y.keys()))
     ax_pr.set_xlabel("time (s)")
@@ -210,18 +244,21 @@ def main():
             play_from(state["start_pos"])
 
     def update_cursor(_frame):
-        if state["playing"] and state["start_wall"] is not None:
-            elapsed = time.time() - state["start_wall"]
-            t = state["start_pos"] + elapsed
-            if t >= audio_dur:
-                stop()
-                t = audio_dur
-            cursor_mel.set_xdata([t, t])
-            cursor_pr.set_xdata([t, t])
+        # 재생 중일 때만 cursor 업데이트, 그 외엔 no-op (CPU 절약)
+        if not (state["playing"] and state["start_wall"] is not None):
+            return cursor_mel, cursor_pr
+        elapsed = time.time() - state["start_wall"]
+        t = state["start_pos"] + elapsed
+        if t >= audio_dur:
+            stop()
+            t = audio_dur
+        cursor_mel.set_xdata([t, t])
+        cursor_pr.set_xdata([t, t])
         return cursor_mel, cursor_pr
 
-    anim = FuncAnimation(fig, update_cursor, interval=33,
-                          blit=False, cache_frame_data=False)
+    # 100ms (10fps) 면 cursor 따라가는 데 충분. blit=True 로 cursor 만 redraw
+    anim = FuncAnimation(fig, update_cursor, interval=100,
+                          blit=True, cache_frame_data=False)
 
     def on_click(event):
         if event.inaxes not in (ax_mel, ax_pr) or event.xdata is None:
@@ -256,6 +293,7 @@ def main():
     print("  esc    stop")
     print("─────────────────────────────────\n")
 
+    print("[4d] tight_layout + show…", flush=True)
     try:
         plt.tight_layout()
         plt.show()

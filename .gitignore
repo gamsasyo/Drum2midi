@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# 실행 산출물
+outputs/
+input/
+*.log
+
+# 외부 의존성 (별도 clone)
+external/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# 모델 캐시 (Demucs 가중치는 ~/.cache/torch 에 저장됨)

@@ -36,7 +36,8 @@ so that a producer can:
 
 ## Example output
 
-A 161.68 BPM rock track, drums separated and analyzed:
+A 161.68 BPM rock track (~180 s), drums separated and analyzed.
+Summary printed to console and `summary.txt`:
 
 ```
 class    count    mean dev (ms)    std (ms)   notes
@@ -50,6 +51,47 @@ cymbal       4          −16.88        1.84
 swing_ratio = 1.000 (straight 8ths)
 ghost notes: hihat 299/444 (67%), snare 24/145 (17%)
 ```
+
+### Visualizations
+
+Each run produces five plots. Below are the actual outputs from the
+analysis above.
+
+**Microtiming over time.** Each dot is one drum hit; y-axis is the
+deviation from the nearest 8th-note grid point in ms (positive = late,
+negative = early). The consistent negative bias across all classes
+shows this drummer pushes every hit ~10 ms ahead of the grid.
+
+![Deviation timeline](assets/dev_timeline.png)
+
+**Deviation histograms per class.** Tight distributions (low std) mean
+the drummer is metronomically consistent within that class. The hi-hat
+peak being far from zero with a narrow spread is a signature of a
+locked-in groove drummer.
+
+![Deviation histograms](assets/dev_histogram.png)
+
+**Mean deviation by beat position.** Reveals whether the drummer
+behaves differently at the 1st beat vs the 3rd, or on downbeats vs
+offbeats. Color encodes mean ms (red = late, blue = early).
+
+![Beat position heatmap](assets/beat_position_heatmap.png)
+
+**Velocity distribution with ghost/accent threshold.** A bimodal
+velocity distribution (two clear peaks) means the class has separable
+accent / ghost groups; the red dashed line marks the auto-detected
+threshold. Single-peak distributions (e.g., kick here) get no ghost
+labels.
+
+![Velocity distribution](assets/velocity_distribution.png)
+
+**Ghost vs accent comparison.** The most musically interesting plot:
+how do ghost notes deviate from accents in microtiming? In dub and
+funk, ghost notes often sit further laid-back; in tight rock playing,
+they ride the same pocket. Left panel shows time-localized scatter,
+right panel shows distribution overlap.
+
+![Ghost vs accent](assets/ghost_vs_accent.png)
 
 ---
 

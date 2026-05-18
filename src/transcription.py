@@ -45,8 +45,18 @@ ADTOF_PITCH_TO_CLASS = {
 }
 
 
-def _try_adtof(drums_wav: Path, output_dir: Path) -> Optional[Dict[str, List[float]]]:
-    """ADTOF-pytorch (xavriley) 사용. 5클래스 반환."""
+def _try_adtof(
+    drums_wav: Path,
+    output_dir: Path,
+    thresholds: Optional[List[float]] = None,
+) -> Optional[Dict[str, List[float]]]:
+    """
+    ADTOF-pytorch (xavriley) 사용. 5클래스 반환.
+
+    thresholds: [kick, snare, tom, hihat, cymbal] 각각 0~1.
+        낮을수록 더 많이 잡힘 (recall↑, precision↓).
+        기본 ADTOF 권장: [0.22, 0.24, 0.32, 0.22, 0.30]
+    """
     try:
         import importlib.util
         if importlib.util.find_spec("adtof_pytorch") is None:
@@ -56,7 +66,11 @@ def _try_adtof(drums_wav: Path, output_dir: Path) -> Optional[Dict[str, List[flo
         import pretty_midi
 
         tmp_mid = output_dir / "_adtof_raw.mid"
-        transcribe_to_midi(str(drums_wav), str(tmp_mid), device="cpu")
+        kwargs = {"device": "cpu"}
+        if thresholds is not None:
+            kwargs["thresholds"] = thresholds
+            print(f"[transcription/adtof] custom thresholds: {thresholds}")
+        transcribe_to_midi(str(drums_wav), str(tmp_mid), **kwargs)
 
         pm = pretty_midi.PrettyMIDI(str(tmp_mid))
         onsets: Dict[str, List[float]] = {c: [] for c in DRUM_CLASSES}
@@ -201,7 +215,10 @@ def _resolve_kick_snare_conflicts(
 # ──────────────────────────────────────────────────────────────────
 
 def transcribe_drums(
-    drums_wav: Path, output_dir: Path, method: str = "auto"
+    drums_wav: Path,
+    output_dir: Path,
+    method: str = "auto",
+    adtof_thresholds: Optional[List[float]] = None,
 ) -> tuple[Dict[str, List[float]], str]:
     """
     드럼 onset 검출. 반환: (onsets_dict, used_method).
@@ -224,7 +241,7 @@ def transcribe_drums(
     onsets = None
     for m in methods_to_try:
         if m == "adtof":
-            onsets = _try_adtof(drums_wav, output_dir)
+            onsets = _try_adtof(drums_wav, output_dir, thresholds=adtof_thresholds)
         elif m == "oaf":
             onsets = _try_oaf(drums_wav)
         elif m == "librosa":

@@ -45,6 +45,10 @@ def main():
     p.add_argument("--transcription-method", default="auto",
                    choices=["auto", "adtof", "oaf", "librosa"],
                    help="Stage 2 method 강제")
+    p.add_argument("--adtof-thresholds", default=None,
+                   help="ADTOF per-class 임계값 (낮을수록 더 잡힘). "
+                        "comma-separated 5개: kick,snare,tom,hihat,cymbal. "
+                        "기본 [0.22,0.24,0.32,0.22,0.30]. 예: 0.15,0.18,0.25,0.15,0.22")
     p.add_argument("--beat-tracker", default="auto",
                    choices=["auto", "madmom", "librosa"],
                    help="Stage 4 비트 트래커 강제")
@@ -82,13 +86,31 @@ def main():
     print("\n" + "=" * 64)
     print("Stage 2: TRANSCRIPTION (coarse onsets)")
     print("=" * 64)
-    if args.skip_transcription and (out / "raw_onsets.json").exists():
+    if args.skip_transcription and (out / "raw_onsets.json").exists() and not args.adtof_thresholds:
         print(f"[transcription] --skip-transcription: 기존 raw_onsets.json 사용")
         import json
         cached = json.loads((out / "raw_onsets.json").read_text())
         raw_onsets, method = cached["onsets"], cached.get("method", "unknown")
     else:
-        raw_onsets, method = transcribe_drums(drums_wav, out, method=args.transcription_method)
+        # threshold 바꾸면 캐시 무효화
+        if args.adtof_thresholds and (out / "raw_onsets.json").exists():
+            (out / "raw_onsets.json").unlink()
+            (out / "refined_onsets.json").unlink(missing_ok=True)
+            print("[transcription] --adtof-thresholds 지정됨 → 캐시 삭제 후 재실행")
+        adtof_th = None
+        if args.adtof_thresholds:
+            try:
+                adtof_th = [float(x) for x in args.adtof_thresholds.split(",")]
+                if len(adtof_th) != 5:
+                    raise ValueError(f"5개 필요, {len(adtof_th)}개 받음")
+            except Exception as e:
+                print(f"ERROR: --adtof-thresholds 형식 오류: {e}", file=sys.stderr)
+                sys.exit(1)
+        raw_onsets, method = transcribe_drums(
+            drums_wav, out,
+            method=args.transcription_method,
+            adtof_thresholds=adtof_th,
+        )
 
     # ──────────── Stage 3 ────────────
     print("\n" + "=" * 64)

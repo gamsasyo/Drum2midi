@@ -28,12 +28,15 @@ REFINE_BAND = {
 
 def _refine_one(y: np.ndarray, sr: int, coarse_t: float, cls: str, window_ms: float = 50.0) -> float:
     """
-    coarse_t 주변에서 정밀 onset 시각을 찾는다.
-    방식: 클래스 밴드 필터 → |signal|² 의 짧은 smoothing → 미분 → 양수 영역의 첫 피크.
+    coarse_t 주변에서 정밀 onset 시각 (attack START) 검출.
 
-    "첫 피크"를 잡는 이유: argmax(diff)는 트랜지언트의 정점을 찾지만,
-    실제 onset은 그 직전 rising edge의 시작점에 가깝다.
-    여기서는 단순화해서 argmax(diff)를 사용 — 일관성이 ms-level 절대값보다 중요.
+    2단계:
+      1) 클래스 밴드 필터 → |signal|² 의 짧은 smoothing → 미분 최대점 (attack peak)
+      2) 그 peak 직전의 envelope 최저점으로 backtrack → attack 시작점
+
+    이전 버전은 1단계(attack peak)만 썼는데, drum hit 의 attack 이 ~10-30ms
+    길어서 transient START 와 PEAK 사이 일관된 +15ms 시스템 바이어스 발생.
+    Backtrack 으로 attack 시작점 정렬 (librosa.onset.onset_backtrack 동일 알고리즘).
     """
     low, high = REFINE_BAND[cls]
     y_f = _bandpass(y, sr, low, high)
@@ -56,8 +59,26 @@ def _refine_one(y: np.ndarray, sr: int, coarse_t: float, cls: str, window_ms: fl
     if len(diff) == 0 or diff.max() <= 0:
         return coarse_t
 
+    # 1) attack peak
     peak_idx = int(np.argmax(diff))
-    refined_sample = start + peak_idx
+
+    # 2) Backtrack: peak 직전의 envelope 최저점 (attack start) 찾기.
+    #    peak_idx 에서 좌측으로 이동하면서 env 값이 더 이상 감소 안 할 때까지.
+    #    상한 ~30ms (typical drum attack 길이).
+    max_backtrack = min(peak_idx, int(0.030 * sr))
+    start_idx = peak_idx
+    for k in range(peak_idx, peak_idx - max_backtrack, -1):
+        if k <= 0:
+            break
+        if env[k] < env[start_idx]:
+            start_idx = k
+    # peak 와 start_idx 사이 envelope 최저값 자리 = attack start
+    if start_idx < peak_idx:
+        attack_start = start_idx + int(np.argmin(env[start_idx:peak_idx + 1]))
+    else:
+        attack_start = peak_idx
+
+    refined_sample = start + attack_start
     return refined_sample / sr
 
 

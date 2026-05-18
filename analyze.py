@@ -168,31 +168,64 @@ def main():
 
     # MIDI (Ableton clip 길이 매칭 위해 원본 오디오 길이까지 패딩)
     import soundfile as sf
-    from src.midi_export import estimate_precise_bpm
+    from src.midi_export import estimate_precise_bpm, export_midi_tempo_map
     audio_dur = sf.info(str(args.input_wav)).duration
     midi_path = run_dir / "drums.mid"
     export_midi(refined, beats, midi_path, audio_duration_sec=audio_dur)
 
+    # 가변 BPM 대응 — tempo map MIDI 도 같이 출력 (Reaper / Logic 용)
+    tempo_map_path = run_dir / "drums_tempo_map.mid"
+    export_midi_tempo_map(refined, beats, tempo_map_path, audio_duration_sec=audio_dur)
+
+    # Ableton 멀티-마커 warping 가이드 — 각 비트 시각 출력
+    markers_path = run_dir / "beat_markers.txt"
+    with open(markers_path, "w") as f:
+        f.write("# Ableton warp marker 가이드\n")
+        f.write("# 아래 시각마다 audio clip 에 warp marker 를 추가하면\n")
+        f.write("# 변동 BPM 곡도 일정 박자 grid 에 정확히 정렬 가능.\n")
+        f.write("# format: <beat_index>\t<time_in_seconds>\n#\n")
+        for i, t in enumerate(beats):
+            f.write(f"{i}\t{t:.4f}\n")
+    print(f"[guide] saved: {markers_path}  ({len(beats)} beat markers)")
+
     # DAW 동기화 가이드
     precise_bpm, drift_ms = estimate_precise_bpm(beats)
     guide_path = run_dir / "ableton_sync.txt"
+    is_variable_bpm = drift_ms > 30
+    variable_msg = ""
+    if is_variable_bpm:
+        variable_msg = f"""
+⚠ 가변 BPM 곡 감지 (fit 최대 편차 {drift_ms:.1f}ms > 30ms)
+  곡 자체의 BPM 이 진행 중 변동 → single-tempo MIDI 로는 ±{drift_ms:.0f}ms
+  드리프트 불가피. 아래 3개 경로 중 선택:
+
+  [A] Reaper / Logic / Studio One 등 tempo map 지원 DAW:
+      → drums_tempo_map.mid 사용 (같은 폴더). 가변 BPM 완벽 표현.
+
+  [B] Ableton 에서 정확히 맞추기:
+      1. audio clip 우클릭 → "Warp" 켜기
+      2. beat_markers.txt 의 각 시각마다 audio 에 warp marker 추가
+         (또는 매 4~8 박마다 marker, 곡 변동 정도에 따라)
+      3. Audio 가 일정 BPM 그리드로 재해석됨 → drums.mid 완벽 정렬
+      → 노가다지만 정확. 매 4박 정도면 1~2분 작업.
+
+  [C] 분석만 목적이면 timing_analysis.csv 와 viz/ 보면 됨.
+      MIDI playback 동기화 안 해도 분석값 (deviation, swing, ghost) 정확.
+"""
+
     guide_path.write_text(
         f"""DAW 동기화 가이드
 ================================================================
-이 곡의 정밀 BPM:  {precise_bpm:.4f}
-첫 비트 시각:       {beats[0]:.4f}s
-fit 최대 편차:      {drift_ms:.1f} ms
+이 곡의 정밀 BPM (선형 회귀):  {precise_bpm:.4f}
+첫 비트 시각:                  {beats[0]:.4f}s
+fit 최대 편차:                 {drift_ms:.1f} ms
+변동 여부:                     {'가변 BPM' if is_variable_bpm else '거의 constant'}
 
-★ Ableton 사용시:
+★ 기본 (constant BPM 곡):
   1. 프로젝트 BPM 을 정확히 {precise_bpm:.4f} 로 설정
-     (Tempo 필드 클릭 → 소수점 4자리까지 입력)
-  2. drums.mid 와 원본 오디오 둘 다 동일 트랙 시작점에 정렬
-  3. MIDI clip 의 "Original BPM" 도 {precise_bpm:.4f} 로 설정
-  4. 오디오는 warp 비활성화 (원본 그대로)
-
-★ 그래도 드리프트 발견시:
-  - 곡 자체가 가변 BPM (fit 최대 편차 {drift_ms:.1f}ms 가 30ms+ 면 의심)
-  - 또는 librosa beat tracker 의 한계 (madmom / Beat-this! 같은 SOTA 필요)
+  2. drums.mid 드래그, MIDI clip "Original BPM" 도 {precise_bpm:.4f}
+  3. 오디오는 warp OFF (원본 그대로)
+{variable_msg}
 ================================================================
 """
     )
